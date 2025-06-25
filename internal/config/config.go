@@ -78,11 +78,12 @@ func getEnvAsIntOrDefault(key string, defaultValue int) int {
 	return defaultValue
 }
 
-func getEnvAsBoolOrDefault(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
-		}
-	}
-	return defaultValue
-}
+// getEnvAsBoolOrDefault helper function (currently unused but kept for future use)
+// func getEnvAsBoolOrDefault(key string, defaultValue bool) bool {
+// 	if value := os.Getenv(key); value != "" {
+// 		if boolValue, err := strconv.ParseBool(value); err == nil {
+// 			return boolValue
+// 		}
+// 	}
+// 	return defaultValue
+// }
