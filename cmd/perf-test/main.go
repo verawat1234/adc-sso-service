@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"adc-sso-service/test/performance"
+	performance "adc-sso-service/test/performance-tools"
 
 	"github.com/sirupsen/logrus"
 )
