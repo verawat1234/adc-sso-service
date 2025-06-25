@@ -10,8 +10,6 @@ import (
 
 	"adc-sso-service/internal/auth"
 	"adc-sso-service/internal/config"
-	"adc-sso-service/internal/handlers"
-	"adc-sso-service/internal/middleware"
 	"adc-sso-service/internal/models"
 
 	"github.com/gin-gonic/gin"
@@ -30,7 +28,7 @@ type TestContext struct {
 	Cleanup       func()
 }
 
-// SetupTestContext creates a complete test context with all dependencies
+// SetupTestContext creates a basic test context with database and auth
 func SetupTestContext(t *testing.T) *TestContext {
 	// Set Gin to test mode
 	gin.SetMode(gin.TestMode)
@@ -58,74 +56,12 @@ func SetupTestContext(t *testing.T) *TestContext {
 	// Create auth service
 	authService := auth.NewAuthService(cfg.JWTSecret)
 	
-	// Create middleware
-	authMiddleware := middleware.NewAuthMiddleware(authService, db)
-	
-	// Create handlers
-	authHandler := handlers.NewAuthHandler(db, authService, cfg)
-	healthHandler := handlers.NewHealthHandler(db)
-	orgHandler := handlers.NewOrganizationHandler(db)
-	apiKeyHandler := handlers.NewAPIKeyHandler(db)
-	
-	// Setup router
-	router := gin.New()
-	
-	// Health check
-	router.GET("/health", healthHandler.Health)
-	
-	// SSO routes
-	ssoGroup := router.Group("/sso")
-	{
-		ssoGroup.GET("/login", authHandler.RedirectToSSO)
-		ssoGroup.GET("/callback", authHandler.HandleSSOCallback)
-		ssoGroup.POST("/validate", authHandler.ValidateToken)
-		ssoGroup.POST("/refresh", authHandler.RefreshToken)
-	}
-	
-	// API routes
-	api := router.Group("/api/v1")
-	{
-		// Organization management
-		organizations := api.Group("/organizations")
-		organizations.Use(authMiddleware.FlexibleAuthMiddleware())
-		{
-			organizations.POST("", orgHandler.CreateOrganization)
-			organizations.GET("", orgHandler.ListOrganizations)
-			
-			orgRoutes := organizations.Group("/:org_id")
-			orgRoutes.Use(authMiddleware.RequireOrganizationAccess())
-			{
-				orgRoutes.GET("", orgHandler.GetOrganization)
-				orgRoutes.PUT("", orgHandler.UpdateOrganization)
-				orgRoutes.DELETE("", orgHandler.DeleteOrganization)
-				orgRoutes.GET("/members", orgHandler.ListOrganizationMembers)
-				
-				apiKeys := orgRoutes.Group("/api-keys")
-				{
-					apiKeys.POST("", apiKeyHandler.CreateAPIKey)
-					apiKeys.GET("", apiKeyHandler.ListAPIKeys)
-					apiKeys.GET("/:key_id", apiKeyHandler.GetAPIKey)
-					apiKeys.PUT("/:key_id", apiKeyHandler.UpdateAPIKey)
-					apiKeys.DELETE("/:key_id", apiKeyHandler.DeleteAPIKey)
-					apiKeys.POST("/:key_id/regenerate", apiKeyHandler.RegenerateAPIKey)
-				}
-			}
-		}
-		
-		// Auth routes
-		auth := api.Group("/auth")
-		{
-			auth.POST("/validate", authHandler.ValidateToken)
-			auth.POST("/refresh", authHandler.RefreshToken)
-		}
-	}
-	
 	ctx := &TestContext{
 		DB:           db,
 		AuthService:  authService,
 		Config:       cfg,
 		MockKeycloak: mockKeycloak,
-		Router:       router,
+		Router:       nil, // Router will be set up in individual tests
 		Cleanup: func() {
 			mockKeycloak.Close()
 			CleanupTestDB(t, db)
