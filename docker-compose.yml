@@ -1,0 +1,217 @@
+version: '3.8'
+
+services:
+  # Keycloak SSO Service
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0.1
+    container_name: adc-keycloak
+    environment:
+      # Database configuration
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: keycloak_password
+      
+      # Keycloak admin credentials
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin_password
+      
+      # Keycloak configuration
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: 8180
+      KC_HOSTNAME_STRICT: false
+      KC_HOSTNAME_STRICT_HTTPS: false
+      KC_HTTP_ENABLED: true
+      KC_HEALTH_ENABLED: true
+      KC_METRICS_ENABLED: true
+      
+      # Development mode
+      KC_DEV_MODE: true
+    ports:
+      - "8180:8080"
+    volumes:
+      - ./keycloak/themes:/opt/keycloak/themes
+      - ./keycloak/imports:/opt/keycloak/data/import
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    command: 
+      - start-dev
+      - --import-realm
+    networks:
+      - adc-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Keycloak Database
+  keycloak-db:
+    image: postgres:15-alpine
+    container_name: adc-keycloak-db
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: keycloak_password
+    volumes:
+      - keycloak_db_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    networks:
+      - adc-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for session management (shared between services)
+  redis:
+    image: redis:7-alpine
+    container_name: adc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - adc-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # SSO Service Database
+  sso-db:
+    image: postgres:15-alpine
+    container_name: adc-sso-db
+    environment:
+      POSTGRES_DB: adc_sso
+      POSTGRES_USER: adc_user
+      POSTGRES_PASSWORD: adc_password
+    volumes:
+      - sso_db_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    networks:
+      - adc-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adc_user -d adc_sso"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  keycloak_db_data:
+    driver: local
+  sso_db_data:
+    driver: local
+  redis_data:
+    driver: local
+
+  # ADC SSO Service
+  adc-sso-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: adc-sso-service
+    environment:
+      # Database configuration
+      DATABASE_URL: postgresql://adc_user:adc_password@sso-db:5432/adc_sso?sslmode=disable
+      
+      # Redis configuration
+      REDIS_URL: redis://redis:6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: "0"
+      
+      # JWT configuration
+      JWT_SECRET: development-jwt-secret-key-change-in-production
+      
+      # Keycloak configuration
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: adc-brandkit
+      KEYCLOAK_CLIENT_ID: adc-brandkit-app
+      KEYCLOAK_CLIENT_SECRET: adc-brandkit-client-secret
+      KEYCLOAK_REDIRECT_URI: http://localhost:3000/auth/sso/callback
+      
+      # Frontend configuration
+      FRONTEND_URL: http://localhost:3000
+      
+      # Server configuration
+      PORT: "9000"
+      GIN_MODE: debug
+    ports:
+      - "9000:9000"
+    volumes:
+      - .:/app
+      - /app/tmp
+    depends_on:
+      sso-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    networks:
+      - adc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ADC SSO Service (Production)
+  adc-sso-service-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: adc-sso-service-prod
+    environment:
+      # Database configuration - use external services in production
+      DATABASE_URL: ${DATABASE_URL:-postgresql://adc_user:adc_password@sso-db:5432/adc_sso?sslmode=disable}
+      
+      # Redis configuration - use external Redis in production
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
+      
+      # JWT configuration
+      JWT_SECRET: ${JWT_SECRET:-production-jwt-secret-key}
+      
+      # Keycloak configuration
+      KEYCLOAK_URL: ${KEYCLOAK_URL:-http://keycloak:8080}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-adc-brandkit}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-adc-brandkit-app}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-adc-brandkit-client-secret}
+      KEYCLOAK_REDIRECT_URI: ${KEYCLOAK_REDIRECT_URI:-http://localhost:3000/auth/sso/callback}
+      
+      # Frontend configuration
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      
+      # Server configuration
+      PORT: "9000"
+      GIN_MODE: release
+    ports:
+      - "9001:9000"
+    depends_on:
+      sso-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - adc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    profiles:
+      - production
+
+networks:
+  adc-network:
+    driver: bridge

@@ -1,0 +1,245 @@
+name: Deploy to Environment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: string
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: true
+        type: string
+    secrets:
+      KUBE_CONFIG:
+        description: 'Kubernetes config for target environment'
+        required: true
+      DATABASE_URL:
+        description: 'Database connection string'
+        required: true
+      REDIS_URL:
+        description: 'Redis connection string'
+        required: true
+      JWT_SECRET:
+        description: 'JWT signing secret'
+        required: true
+      KEYCLOAK_CLIENT_SECRET:
+        description: 'Keycloak client secret'
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+
+    - name: Create namespace if not exists
+      run: |
+        kubectl create namespace adc-sso-${{ inputs.environment }} --dry-run=client -o yaml | kubectl apply -f -
+
+    - name: Create secrets
+      run: |
+        kubectl create secret generic adc-sso-secrets \
+          --from-literal=database-url="${{ secrets.DATABASE_URL }}" \
+          --from-literal=redis-url="${{ secrets.REDIS_URL }}" \
+          --from-literal=jwt-secret="${{ secrets.JWT_SECRET }}" \
+          --from-literal=keycloak-client-secret="${{ secrets.KEYCLOAK_CLIENT_SECRET }}" \
+          --namespace=adc-sso-${{ inputs.environment }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+    - name: Deploy application
+      run: |
+        # Create deployment manifest
+        cat <<EOF > deployment.yaml
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: adc-sso-service
+          namespace: adc-sso-${{ inputs.environment }}
+          labels:
+            app: adc-sso-service
+            environment: ${{ inputs.environment }}
+        spec:
+          replicas: ${{ inputs.environment == 'production' && 3 || 2 }}
+          selector:
+            matchLabels:
+              app: adc-sso-service
+          template:
+            metadata:
+              labels:
+                app: adc-sso-service
+                environment: ${{ inputs.environment }}
+            spec:
+              containers:
+              - name: adc-sso-service
+                image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}
+                ports:
+                - containerPort: 9000
+                env:
+                - name: PORT
+                  value: "9000"
+                - name: GIN_MODE
+                  value: ${{ inputs.environment == 'production' && 'release' || 'debug' }}
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: adc-sso-secrets
+                      key: database-url
+                - name: REDIS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: adc-sso-secrets
+                      key: redis-url
+                - name: JWT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: adc-sso-secrets
+                      key: jwt-secret
+                - name: KEYCLOAK_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: adc-sso-secrets
+                      key: keycloak-client-secret
+                - name: KEYCLOAK_URL
+                  value: ${{ inputs.environment == 'production' && 'https://auth.adc.com' || 'https://auth-staging.adc.com' }}
+                - name: KEYCLOAK_REALM
+                  value: adc-brandkit
+                - name: KEYCLOAK_CLIENT_ID
+                  value: adc-brandkit-app
+                - name: KEYCLOAK_REDIRECT_URI
+                  value: ${{ inputs.environment == 'production' && 'https://app.adc.com/auth/sso/callback' || 'https://app-staging.adc.com/auth/sso/callback' }}
+                - name: FRONTEND_URL
+                  value: ${{ inputs.environment == 'production' && 'https://app.adc.com' || 'https://app-staging.adc.com' }}
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: 9000
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+                  successThreshold: 1
+                  failureThreshold: 3
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: 9000
+                  initialDelaySeconds: 5
+                  periodSeconds: 5
+                  timeoutSeconds: 3
+                  successThreshold: 1
+                  failureThreshold: 3
+                resources:
+                  requests:
+                    memory: "256Mi"
+                    cpu: "250m"
+                  limits:
+                    memory: "512Mi"
+                    cpu: "500m"
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  runAsNonRoot: true
+                  runAsUser: 1000
+                  readOnlyRootFilesystem: true
+                  capabilities:
+                    drop:
+                    - ALL
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: adc-sso-service
+          namespace: adc-sso-${{ inputs.environment }}
+          labels:
+            app: adc-sso-service
+        spec:
+          selector:
+            app: adc-sso-service
+          ports:
+          - port: 80
+            targetPort: 9000
+            protocol: TCP
+          type: ClusterIP
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: adc-sso-service
+          namespace: adc-sso-${{ inputs.environment }}
+          annotations:
+            kubernetes.io/ingress.class: nginx
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+        spec:
+          tls:
+          - hosts:
+            - sso${{ inputs.environment == 'production' && '' || '-staging' }}.adc.com
+            secretName: adc-sso-tls
+          rules:
+          - host: sso${{ inputs.environment == 'production' && '' || '-staging' }}.adc.com
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: adc-sso-service
+                    port:
+                      number: 80
+        EOF
+        
+        kubectl apply -f deployment.yaml
+
+    - name: Wait for deployment to be ready
+      run: |
+        kubectl rollout status deployment/adc-sso-service \
+          --namespace=adc-sso-${{ inputs.environment }} \
+          --timeout=300s
+
+    - name: Verify deployment
+      run: |
+        # Get pod status
+        kubectl get pods -l app=adc-sso-service \
+          --namespace=adc-sso-${{ inputs.environment }}
+        
+        # Test health endpoint
+        kubectl port-forward service/adc-sso-service 8080:80 \
+          --namespace=adc-sso-${{ inputs.environment }} &
+        
+        sleep 10
+        
+        curl -f http://localhost:8080/health || exit 1
+        
+        echo "Deployment to ${{ inputs.environment }} completed successfully!"
+
+    - name: Run smoke tests
+      if: inputs.environment != 'production'
+      run: |
+        # Run basic smoke tests against the deployed service
+        echo "Running smoke tests..."
+        # Add your smoke test commands here
+
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -f kubeconfig
+        pkill kubectl || true

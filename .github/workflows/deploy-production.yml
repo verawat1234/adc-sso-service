@@ -1,0 +1,188 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [ published ]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy (default: latest)'
+        required: false
+        default: 'latest'
+      skip_tests:
+        description: 'Skip pre-deployment tests'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  pre-deployment-checks:
+    name: Pre-deployment Checks
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Verify staging deployment
+      run: |
+        echo "Verifying staging environment is healthy..."
+        # Check staging health
+        curl -f https://sso-staging.adc.com/health
+        
+        # Check staging performance
+        response_time=$(curl -o /dev/null -s -w '%{time_total}' https://sso-staging.adc.com/health)
+        if (( $(echo "$response_time > 1.0" | bc -l) )); then
+          echo "❌ Staging response time too high: ${response_time}s"
+          exit 1
+        fi
+        
+        echo "✅ Staging environment is healthy"
+
+    - name: Security scan of production image
+      run: |
+        echo "Running security scan on production image..."
+        docker pull ghcr.io/${{ github.repository }}:${{ github.event.inputs.image_tag || 'latest' }}
+        
+        # Run Trivy scan
+        docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          aquasec/trivy:latest image \
+          --exit-code 1 \
+          --severity HIGH,CRITICAL \
+          ghcr.io/${{ github.repository }}:${{ github.event.inputs.image_tag || 'latest' }}
+
+  deploy-production:
+    name: Deploy to Production Environment
+    needs: pre-deployment-checks
+    if: always() && (needs.pre-deployment-checks.result == 'success' || inputs.skip_tests)
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: production
+      image_tag: ${{ github.event.inputs.image_tag || 'latest' }}
+    secrets:
+      KUBE_CONFIG: ${{ secrets.PRODUCTION_KUBE_CONFIG }}
+      DATABASE_URL: ${{ secrets.PRODUCTION_DATABASE_URL }}
+      REDIS_URL: ${{ secrets.PRODUCTION_REDIS_URL }}
+      JWT_SECRET: ${{ secrets.PRODUCTION_JWT_SECRET }}
+      KEYCLOAK_CLIENT_SECRET: ${{ secrets.PRODUCTION_KEYCLOAK_CLIENT_SECRET }}
+
+  post-deployment-verification:
+    name: Post-deployment Verification
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Verify production deployment
+      env:
+        PRODUCTION_URL: https://sso.adc.com
+      run: |
+        echo "Verifying production deployment..."
+        
+        # Wait for deployment to stabilize
+        sleep 30
+        
+        # Health check
+        for i in {1..5}; do
+          if curl -f $PRODUCTION_URL/health; then
+            echo "✅ Health check $i/5 passed"
+            break
+          else
+            echo "❌ Health check $i/5 failed"
+            if [ $i -eq 5 ]; then
+              exit 1
+            fi
+            sleep 10
+          fi
+        done
+
+    - name: Run production smoke tests
+      env:
+        PRODUCTION_URL: https://sso.adc.com
+      run: |
+        echo "Running production smoke tests..."
+        
+        # Test service info
+        response=$(curl -s $PRODUCTION_URL/)
+        if echo "$response" | grep -q "ADC SSO Service"; then
+          echo "✅ Service info endpoint working"
+        else
+          echo "❌ Service info endpoint failed"
+          exit 1
+        fi
+        
+        # Test health endpoint detailed
+        health_response=$(curl -s $PRODUCTION_URL/health)
+        if echo "$health_response" | grep -q '"status":"healthy"'; then
+          echo "✅ Health endpoint reports healthy"
+        else
+          echo "❌ Health endpoint reports unhealthy"
+          echo "$health_response"
+          exit 1
+        fi
+        
+        # Check Redis connectivity
+        if echo "$health_response" | grep -q '"redis":{"status":"connected"'; then
+          echo "✅ Redis connection verified"
+        else
+          echo "❌ Redis connection issue detected"
+          exit 1
+        fi
+
+    - name: Performance baseline check
+      env:
+        PRODUCTION_URL: https://sso.adc.com
+      run: |
+        echo "Running production performance baseline..."
+        
+        # Check response times
+        for endpoint in "/health" "/"; do
+          response_time=$(curl -o /dev/null -s -w '%{time_total}' $PRODUCTION_URL$endpoint)
+          echo "Response time for $endpoint: ${response_time}s"
+          
+          if (( $(echo "$response_time > 2.0" | bc -l) )); then
+            echo "⚠️ High response time detected for $endpoint"
+          fi
+        done
+
+    - name: Rollback on failure
+      if: failure()
+      run: |
+        echo "🚨 Production deployment verification failed - initiating rollback"
+        # Add rollback logic here
+        # kubectl rollout undo deployment/adc-sso-service --namespace=adc-sso-production
+
+    - name: Notify team of deployment
+      if: always()
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then
+          echo "✅ Production deployment successful"
+          echo "Image: ghcr.io/${{ github.repository }}:${{ github.event.inputs.image_tag || 'latest' }}"
+          echo "Environment: https://sso.adc.com"
+        else
+          echo "❌ Production deployment failed"
+        fi
+        # Add notification logic here (Slack, email, PagerDuty, etc.)
+
+  monitoring-alerts:
+    name: Setup Monitoring Alerts
+    runs-on: ubuntu-latest
+    needs: post-deployment-verification
+    if: success()
+    
+    steps:
+    - name: Enable production monitoring
+      run: |
+        echo "Enabling enhanced monitoring for production deployment..."
+        # Add monitoring setup commands here
+        # Example: Enable alerts, update monitoring dashboards, etc.
+        
+    - name: Create deployment record
+      run: |
+        echo "Recording deployment in monitoring system..."
+        # Add deployment tracking logic here

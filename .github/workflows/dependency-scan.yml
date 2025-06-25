@@ -1,0 +1,138 @@
+name: Dependency Scanning
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # Go Module Security Scan
+  go-security:
+    name: Go Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Run Nancy (dependency vulnerability scanner)
+      run: |
+        go install github.com/sonatypecommunity/nancy@latest
+        go list -json -deps ./... | nancy sleuth
+
+    - name: Run govulncheck
+      run: |
+        go install golang.org/x/vuln/cmd/govulncheck@latest
+        govulncheck ./...
+
+  # Docker Image Security Scan
+  docker-security:
+    name: Docker Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build Docker image
+      run: docker build -t adc-sso-service:test .
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'adc-sso-service:test'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Run Hadolint (Dockerfile linter)
+      uses: hadolint/hadolint-action@v3.1.0
+      with:
+        dockerfile: Dockerfile
+        format: sarif
+        output-file: hadolint-results.sarif
+        no-fail: true
+
+    - name: Upload Hadolint scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: hadolint-results.sarif
+
+  # License Compliance
+  license-check:
+    name: License Compliance
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Install go-licenses
+      run: go install github.com/google/go-licenses@latest
+
+    - name: Check licenses
+      run: |
+        go-licenses check ./...
+        go-licenses csv ./... > licenses.csv
+
+    - name: Upload license report
+      uses: actions/upload-artifact@v3
+      with:
+        name: license-report
+        path: licenses.csv
+
+  # Dependency Updates
+  dependency-update:
+    name: Check for Updates
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Update dependencies
+      run: |
+        go get -u ./...
+        go mod tidy
+
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: 'chore: update Go dependencies'
+        title: 'Automated dependency updates'
+        body: |
+          This PR updates Go dependencies to their latest versions.
+          
+          Please review the changes and ensure all tests pass before merging.
+        branch: update-dependencies
+        delete-branch: true

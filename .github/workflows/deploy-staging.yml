@@ -1,0 +1,87 @@
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [ develop ]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Docker image tag to deploy (default: develop)'
+        required: false
+        default: 'develop'
+
+jobs:
+  deploy-staging:
+    name: Deploy to Staging Environment
+    uses: ./.github/workflows/deploy.yml
+    with:
+      environment: staging
+      image_tag: ${{ github.event.inputs.image_tag || 'develop' }}
+    secrets:
+      KUBE_CONFIG: ${{ secrets.STAGING_KUBE_CONFIG }}
+      DATABASE_URL: ${{ secrets.STAGING_DATABASE_URL }}
+      REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
+      JWT_SECRET: ${{ secrets.STAGING_JWT_SECRET }}
+      KEYCLOAK_CLIENT_SECRET: ${{ secrets.STAGING_KEYCLOAK_CLIENT_SECRET }}
+
+  post-deployment-tests:
+    name: Post-Deployment Tests
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.23'
+
+    - name: Run staging smoke tests
+      env:
+        STAGING_URL: https://sso-staging.adc.com
+      run: |
+        # Basic health check
+        curl -f $STAGING_URL/health
+        
+        # Test service info endpoint
+        curl -f $STAGING_URL/
+        
+        echo "Staging deployment verification completed!"
+
+    - name: Run staging performance tests
+      env:
+        STAGING_URL: https://sso-staging.adc.com
+      run: |
+        # Run lightweight performance test against staging
+        echo "Running staging performance tests..."
+        # Modify simple_perf.go to use STAGING_URL
+        sed "s|http://localhost:9000|$STAGING_URL|g" simple_perf.go > staging_perf.go
+        go run staging_perf.go > staging-perf-results.txt
+        
+        # Check if performance is acceptable
+        if grep -q "High error rate" staging-perf-results.txt; then
+          echo "❌ High error rate detected in staging"
+          exit 1
+        fi
+        
+        echo "✅ Staging performance tests passed"
+
+    - name: Upload staging test results
+      uses: actions/upload-artifact@v3
+      with:
+        name: staging-test-results
+        path: staging-perf-results.txt
+
+    - name: Notify team
+      if: failure()
+      run: |
+        echo "🚨 Staging deployment failed or tests failed"
+        # Add notification logic here (Slack, email, etc.)
+        
+    - name: Notify success
+      if: success()
+      run: |
+        echo "✅ Staging deployment and tests completed successfully"
+        # Add success notification logic here

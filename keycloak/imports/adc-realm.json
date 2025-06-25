@@ -1,0 +1,75 @@
+{
+  "id": "adc-brandkit",
+  "realm": "adc-brandkit",
+  "displayName": "ADC BrandKit",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": true,
+  "rememberMe": true,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "users": [
+    {
+      "username": "admin",
+      "email": "admin@adcbrandkit.com",
+      "firstName": "Admin",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": false
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "adc-brandkit-app",
+      "name": "ADC BrandKit Application",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "adc-brandkit-client-secret",
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "http://localhost:8800/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000",
+        "http://localhost:8800"
+      ],
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "fullScopeAllowed": true
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "google",
+      "displayName": "Google",
+      "providerId": "google",
+      "enabled": false,
+      "config": {
+        "syncMode": "IMPORT"
+      }
+    },
+    {
+      "alias": "github",
+      "displayName": "GitHub", 
+      "providerId": "github",
+      "enabled": false,
+      "config": {
+        "syncMode": "IMPORT"
+      }
+    }
+  ]
+}

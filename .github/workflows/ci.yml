@@ -1,0 +1,372 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  release:
+    types: [ published ]
+
+env:
+  GO_VERSION: '1.23'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Code Quality and Security
+  code-quality:
+    name: Code Quality & Security
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Needed for SonarQube
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Run staticcheck
+      uses: dominikh/staticcheck-action@v1.3.0
+      with:
+        version: "2023.1.6"
+
+    - name: Run gosec Security Scanner
+      uses: securecodewarrior/github-action-gosec@master
+      with:
+        args: '-fmt sarif -out gosec.sarif ./...'
+        
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: gosec.sarif
+
+    - name: Run golangci-lint
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: latest
+        args: --timeout=5m
+
+  # Unit Tests
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ['1.22', '1.23']
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go ${{ matrix.go-version }}
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ matrix.go-version }}-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-${{ matrix.go-version }}-
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Create test database
+      env:
+        PGPASSWORD: postgres
+      run: |
+        psql -h localhost -U postgres -c "CREATE DATABASE adc_sso_test;"
+
+    - name: Run tests with coverage
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/adc_sso_test?sslmode=disable
+        REDIS_URL: redis://localhost:6379
+        JWT_SECRET: test-jwt-secret
+      run: |
+        go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+
+    - name: Generate coverage report
+      run: go tool cover -html=coverage.out -o coverage.html
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.out
+        flags: unittests
+        name: codecov-umbrella
+
+    - name: Upload coverage artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-report-go${{ matrix.go-version }}
+        path: |
+          coverage.out
+          coverage.html
+
+  # Integration Tests
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [test]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Cache Docker layers
+      uses: actions/cache@v3
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+
+    - name: Start services with Docker Compose
+      run: |
+        docker-compose -f docker-compose.yml up -d --build sso-db redis
+        
+    - name: Wait for services to be ready
+      run: |
+        timeout 60 bash -c 'until docker-compose -f docker-compose.yml exec -T sso-db pg_isready -U adc_user -d adc_sso; do sleep 1; done'
+        timeout 60 bash -c 'until docker-compose -f docker-compose.yml exec -T redis redis-cli ping; do sleep 1; done'
+
+    - name: Run integration tests
+      env:
+        DATABASE_URL: postgresql://adc_user:adc_password@localhost:5434/adc_sso?sslmode=disable
+        REDIS_URL: redis://localhost:6379
+        JWT_SECRET: test-jwt-secret
+      run: |
+        go test -tags=integration -v ./tests/integration/...
+
+    - name: Stop services
+      if: always()
+      run: docker-compose -f docker-compose.yml down
+
+  # Performance Tests
+  performance-test:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Start services
+      run: |
+        docker-compose -f docker-compose.yml up -d --build adc-sso-service
+
+    - name: Wait for service to be ready
+      run: |
+        timeout 120 bash -c 'until curl -f http://localhost:9000/health; do sleep 2; done'
+
+    - name: Run performance tests
+      run: |
+        go run simple_perf.go > perf-results.txt
+        go run redis_health_perf.go > redis-perf-results.txt
+
+    - name: Upload performance results
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-results
+        path: |
+          perf-results.txt
+          redis-perf-results.txt
+
+    - name: Stop services
+      if: always()
+      run: docker-compose -f docker-compose.yml down
+
+  # Build and Push Container Image
+  build-and-push:
+    name: Build and Push Container
+    runs-on: ubuntu-latest
+    needs: [code-quality, test]
+    if: github.event_name != 'pull_request'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+  # Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-and-push, integration-test]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Deploy to staging
+      run: |
+        echo "Deploying to staging environment..."
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop"
+        # Add your staging deployment commands here
+        # Example: kubectl set image deployment/adc-sso-service adc-sso-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:develop
+
+  # Deploy to Production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-push, integration-test, performance-test]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Deploy to production
+      run: |
+        echo "Deploying to production environment..."
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        # Add your production deployment commands here
+        # Example: kubectl set image deployment/adc-sso-service adc-sso-service=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+  # Release
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.event_name == 'release'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Build release binaries
+      run: |
+        mkdir -p dist
+        
+        # Build for multiple platforms
+        GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/adc-sso-service-linux-amd64 main.go
+        GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/adc-sso-service-linux-arm64 main.go
+        GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o dist/adc-sso-service-darwin-amd64 main.go
+        GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o dist/adc-sso-service-darwin-arm64 main.go
+        GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/adc-sso-service-windows-amd64.exe main.go
+
+    - name: Create release archive
+      run: |
+        cd dist
+        for file in *; do
+          if [[ "$file" == *.exe ]]; then
+            zip "${file%.*}.zip" "$file"
+          else
+            tar -czf "${file}.tar.gz" "$file"
+          fi
+        done
+
+    - name: Upload release assets
+      uses: softprops/action-gh-release@v1
+      with:
+        files: dist/*
+        generate_release_notes: true

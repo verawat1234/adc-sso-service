@@ -1,0 +1,293 @@
+/* ADC BrandKit Custom Theme */
+
+:root {
+    --primary-color: #6366f1;
+    --primary-hover: #4f46e5;
+    --secondary-color: #8b5cf6;
+    --background-color: #ffffff;
+    --card-background: #ffffff;
+    --text-primary: #1f2937;
+    --text-secondary: #6b7280;
+    --border-color: #e5e7eb;
+    --success-color: #10b981;
+    --error-color: #ef4444;
+    --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    margin: 0;
+    padding: 0;
+}
+
+.login-pf {
+    background: transparent;
+    padding-top: 0;
+}
+
+.login-pf body {
+    background: transparent;
+}
+
+.card-pf {
+    background: var(--card-background);
+    border: none;
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    max-width: 420px;
+    margin: 10vh auto;
+    padding: 2rem;
+}
+
+.login-pf-page .login-pf-brand {
+    margin-bottom: 2rem;
+    text-align: center;
+}
+
+.login-pf-page .login-pf-brand img {
+    max-height: 60px;
+    width: auto;
+}
+
+.login-pf-page .card-pf h1 {
+    color: var(--text-primary);
+    font-size: 1.875rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    text-align: center;
+}
+
+.login-pf-page .card-pf .instruction {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    text-align: center;
+    margin-bottom: 2rem;
+}
+
+/* Form styling */
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+.form-group label {
+    color: var(--text-primary);
+    font-weight: 500;
+    font-size: 0.875rem;
+    margin-bottom: 0.5rem;
+    display: block;
+}
+
+.form-control {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    font-size: 1rem;
+    transition: all 0.2s ease;
+    background-color: #ffffff;
+    color: var(--text-primary);
+}
+
+.form-control:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+.form-control:invalid {
+    border-color: var(--error-color);
+}
+
+/* Button styling */
+.btn {
+    border-radius: 8px;
+    font-weight: 600;
+    padding: 0.75rem 1.5rem;
+    font-size: 1rem;
+    transition: all 0.2s ease;
+    border: none;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    text-align: center;
+}
+
+.btn-primary, input[type="submit"] {
+    background-color: var(--primary-color);
+    color: white;
+    width: 100%;
+    margin-bottom: 1rem;
+}
+
+.btn-primary:hover, input[type="submit"]:hover {
+    background-color: var(--primary-hover);
+    transform: translateY(-1px);
+}
+
+.btn-default, .btn-secondary {
+    background-color: transparent;
+    color: var(--primary-color);
+    border: 2px solid var(--primary-color);
+}
+
+.btn-default:hover, .btn-secondary:hover {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+/* Social login buttons */
+.kc-social-providers {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.kc-social-providers .kc-social-provider-name {
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 0.75rem;
+    border: 2px solid var(--border-color);
+    transition: all 0.2s ease;
+    text-decoration: none;
+    display: block;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.kc-social-providers .kc-social-provider-name:hover {
+    border-color: var(--primary-color);
+    background-color: rgba(99, 102, 241, 0.05);
+    transform: translateY(-1px);
+}
+
+.kc-social-provider-google .kc-social-provider-name {
+    border-color: #4285f4;
+    color: #4285f4;
+}
+
+.kc-social-provider-github .kc-social-provider-name {
+    border-color: #333;
+    color: #333;
+}
+
+.kc-social-provider-microsoft .kc-social-provider-name {
+    border-color: #00a1f1;
+    color: #00a1f1;
+}
+
+/* Error messages */
+.alert-error {
+    background-color: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #dc2626;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+}
+
+.alert-success {
+    background-color: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    color: #16a34a;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+}
+
+.alert-warning {
+    background-color: #fffbeb;
+    border: 1px solid #fed7aa;
+    color: #d97706;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    font-size: 0.875rem;
+}
+
+/* Links */
+a {
+    color: var(--primary-color);
+    text-decoration: none;
+    font-weight: 500;
+}
+
+a:hover {
+    color: var(--primary-hover);
+    text-decoration: underline;
+}
+
+/* Checkbox styling */
+.checkbox {
+    display: flex;
+    align-items: center;
+    margin: 1rem 0;
+}
+
+.checkbox input[type="checkbox"] {
+    margin-right: 0.5rem;
+    width: 1rem;
+    height: 1rem;
+}
+
+.checkbox label {
+    margin: 0;
+    font-size: 0.875rem;
+    color: var(--text-secondary);
+}
+
+/* Login options */
+.login-pf-page .form-actions {
+    margin-top: 2rem;
+}
+
+.login-pf-page .form-actions a {
+    font-size: 0.875rem;
+    display: block;
+    text-align: center;
+    margin-top: 1rem;
+}
+
+/* Responsive design */
+@media (max-width: 480px) {
+    .card-pf {
+        margin: 5vh 1rem;
+        padding: 1.5rem;
+    }
+    
+    .login-pf-page .card-pf h1 {
+        font-size: 1.5rem;
+    }
+}
+
+/* Loading state */
+.btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Focus styles for accessibility */
+.btn:focus, .form-control:focus {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+/* Custom ADC BrandKit elements */
+.adc-logo {
+    width: 200px;
+    height: auto;
+    margin: 0 auto 2rem;
+    display: block;
+}
+
+.adc-tagline {
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    margin-bottom: 2rem;
+    font-style: italic;
+}
